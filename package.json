@@ -1,0 +1,6 @@
+{
+  "scripts": {
+  "test": "newman run \"C:\\Users\\EYITEMI\\Desktop\\QA_Regression_Rodiall\\Rodiall API.postman_collection.json\" -e \"C:\\Users\\EYITEMI\\Desktop\\QA_Regression_Rodiall\\Mobiwire Dev.postman_environment.json\" -r htmlextra --reporter-htmlextra-export \"report.html\""
+}
+
+}
