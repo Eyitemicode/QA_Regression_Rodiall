@@ -1,12 +1,6 @@
 name: Newman API Regression with Slack Notification
 
 on:
-  jobs:
-  run-newman:
-    runs-on: ubuntu-latest
-    env:
-      ACTIONS_RUNNER_DEBUG: true
-      ACTIONS_STEP_DEBUG: true
 
   workflow_dispatch:
   push:
