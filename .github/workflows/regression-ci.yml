@@ -1,7 +1,6 @@
 name: Newman API Regression with Slack Notification
 
 on:
-
   workflow_dispatch:
   push:
     branches:
