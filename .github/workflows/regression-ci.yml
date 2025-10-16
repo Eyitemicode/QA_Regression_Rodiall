@@ -1,0 +1,52 @@
+name: Newman API Regression with Slack Notification
+
+on:
+  workflow_dispatch: # Allows manual trigger
+  push:
+    branches:
+      - main  # change branch name if needed
+
+jobs:
+  run-newman:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1 — Checkout Repo
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Step 2 — Install Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      # Step 3 — Install Newman + HTML Extra
+      - name: Install Newman and HTML Extra Reporter
+        run: |
+          npm install -g newman
+          npm install -g newman-reporter-htmlextra
+
+      # Step 4 — Run Newman Command
+      - name: Run API Regression Tests
+        run: |
+          newman run "Rodiall API.postman_collection.json" \
+            -e "Mobiwire Dev.postman_environment.json" \
+            -r htmlextra --reporter-htmlextra-export "report.html"
+
+      # Step 5 — Upload Report as Artifact
+      - name: Upload HTML Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: newman-html-report
+          path: report.html
+
+      # Step 6 — Send Slack Notification
+      - name: Send Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_USERNAME: "GitHub Actions Bot"
+          SLACK_TITLE: "✅ Newman Regression Test Completed"
+          SLACK_MESSAGE: "The API regression test has finished. Download the HTML Report here:"
+          SLACK_FOOTER: "Rodiall QA Automation"
