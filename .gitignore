@@ -1,0 +1,5 @@
+node_modules/
+newman/*.html
+newman/*.json
+.DS_Store
+*.local

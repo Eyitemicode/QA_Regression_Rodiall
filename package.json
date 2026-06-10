@@ -1,0 +1,19 @@
+{
+  "name": "api_automation_rodial",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "newman run \"Rodiall API.postman_collection.json\" -e \"Rodiall Dev .postman_environment.json\" --reporters cli,htmlextra --reporter-htmlextra-export \"newman/Rodiall-API-report.html\" --reporter-htmlextra-title \"Rodiall API Test Report\" --reporter-htmlextra-showEnvironmentData --timeout-request 15000",
+    "test:html": "newman run \"Rodiall API.postman_collection.json\" -e \"Rodiall Dev .postman_environment.json\" --reporters htmlextra --reporter-htmlextra-export \"newman/Rodiall-API-report.html\" --reporter-htmlextra-title \"Rodiall API Test Report\" --reporter-htmlextra-showEnvironmentData --timeout-request 15000",
+    "fix": "node fix-and-automate.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "newman": "^6.2.2",
+    "newman-reporter-htmlextra": "^1.23.1"
+  }
+}

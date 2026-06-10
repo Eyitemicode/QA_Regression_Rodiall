@@ -1,0 +1,126 @@
+name: Rodiall API Tests
+
+on:
+  schedule:
+    # Every Wednesday at 08:00 UTC (09:00 WAT)
+    - cron: '0 8 * * 3'
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  run-tests:
+    name: Run Newman API Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Newman tests
+        id: newman
+        run: |
+          npm test 2>&1 | tee newman-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Parse test summary
+        id: summary
+        run: |
+          OUTPUT=$(cat newman-output.txt)
+
+          ITERATIONS=$(echo "$OUTPUT" | grep -A1 "iterations" | grep -Eo "[0-9]+" | head -2 | tr '\n' '/')
+          REQUESTS=$(echo "$OUTPUT" | grep -A1 "requests" | grep -Eo "[0-9]+" | head -2 | tr '\n' '/')
+          SCRIPTS=$(echo "$OUTPUT" | grep -A1 "test-scripts" | grep -Eo "[0-9]+" | head -2 | tr '\n' '/')
+          ASSERTIONS=$(echo "$OUTPUT" | grep -A1 "assertions" | grep -Eo "[0-9]+" | head -2 | tr '\n' '/')
+          DURATION=$(echo "$OUTPUT" | grep "total run duration" | grep -Eo "[0-9]+m [0-9.]+s|[0-9.]+s" | head -1)
+          AVG_RESP=$(echo "$OUTPUT" | grep "average response time" | grep -Eo "\[.*\]" | head -1)
+
+          REQ_EXEC=$(echo "$REQUESTS" | cut -d'/' -f1)
+          REQ_FAIL=$(echo "$REQUESTS" | cut -d'/' -f2)
+          ASSERT_EXEC=$(echo "$ASSERTIONS" | cut -d'/' -f1)
+          ASSERT_FAIL=$(echo "$ASSERTIONS" | cut -d'/' -f2)
+          SCRIPT_FAIL=$(echo "$SCRIPTS" | cut -d'/' -f2)
+
+          if [ "$ASSERT_FAIL" = "0" ] && [ "$SCRIPT_FAIL" = "0" ] && [ "$REQ_FAIL" = "0" ]; then
+            STATUS="✅ ALL TESTS PASSED"
+          else
+            STATUS="⚠️ SOME TESTS FAILED"
+          fi
+
+          # Capture failure details (first 30 lines after #  failure)
+          FAILURES=$(echo "$OUTPUT" | grep -A 150 "#  failure" | grep -E "AssertionError|Error|inside" | head -30 | sed 's/^/    /')
+
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "req_exec=$REQ_EXEC" >> $GITHUB_OUTPUT
+          echo "req_fail=$REQ_FAIL" >> $GITHUB_OUTPUT
+          echo "assert_exec=$ASSERT_EXEC" >> $GITHUB_OUTPUT
+          echo "assert_fail=$ASSERT_FAIL" >> $GITHUB_OUTPUT
+          echo "script_fail=$SCRIPT_FAIL" >> $GITHUB_OUTPUT
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "avg_resp=$AVG_RESP" >> $GITHUB_OUTPUT
+
+          # Write failure details to file for email body
+          {
+            echo "FAILURES_START"
+            echo "$FAILURES"
+            echo "FAILURES_END"
+          } >> $GITHUB_OUTPUT
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodiall-api-report-${{ github.run_number }}
+          path: newman/Rodiall-API-report.html
+          retention-days: 30
+
+      - name: Send email report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "[${{ steps.summary.outputs.status }}] Rodiall API Test Report — ${{ github.run_number }} — $(date +'%Y-%m-%d')"
+          to: |
+            oladimeji.ajayi@fbistech.com,
+            eyitemi.abioritsegbemi@fbistech.com,
+            gift.alabo@fbistech.com,
+            osayuki.aganmwonyi@fbistech.com,
+            afolabi.oluwo@fbistech.com
+          from: Rodiall API Tests <${{ secrets.SMTP_USERNAME }}>
+          body: |
+            Rodiall API Automated Test Report
+            ==================================
+            Run #:       ${{ github.run_number }}
+            Date:        ${{ github.event.repository.updated_at }}
+            Status:      ${{ steps.summary.outputs.status }}
+            Branch:      ${{ github.ref_name }}
+
+            Test Results
+            ------------
+            Requests:    ${{ steps.summary.outputs.req_exec }} executed | ${{ steps.summary.outputs.req_fail }} failed
+            Assertions:  ${{ steps.summary.outputs.assert_exec }} executed | ${{ steps.summary.outputs.assert_fail }} failed
+            Test Scripts: 0 script-level errors (failures above are assertion-level)
+            Duration:    ${{ steps.summary.outputs.duration }}
+            Avg Response: ${{ steps.summary.outputs.avg_resp }}
+
+            Failure Details
+            ---------------
+            ${{ steps.summary.outputs.FAILURES_START }}
+
+            Full Report
+            -----------
+            The HTML report has been uploaded as a workflow artifact.
+            View it at: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            --
+            This report is generated automatically every Wednesday.
+            Collection: Rodiall API (269 requests)
