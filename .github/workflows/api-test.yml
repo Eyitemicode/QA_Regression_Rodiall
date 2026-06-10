@@ -79,15 +79,15 @@ jobs:
             /inside "/ {
               match($0, /inside "([^"]+)"/, arr)
               if (arr[1] != "") {
-                printf "  ✗ %s\n    └─ %s\n", test_name, arr[1]
+                printf "FAIL: %s | %s\n", test_name, arr[1]
                 test_name = ""
               }
             }
-          ' | head -80)
+          ' | head -30)
 
           # Passed test cases (first 40)
           PASSED_CASES=$(echo "$OUTPUT" | grep -E "^[[:space:]]+✓" | \
-            sed 's/^[[:space:]]*✓[[:space:]]*/  ✓ /' | head -40)
+            sed 's/^[[:space:]]*✓[[:space:]]*/PASS: /' | head -40)
 
           echo "icon=$ICON"         >> $GITHUB_OUTPUT
           echo "status=$STATUS"     >> $GITHUB_OUTPUT
@@ -124,134 +124,157 @@ jobs:
           path: newman/Rodiall-API-report.html
           retention-days: 30
 
-      # ── EMAIL via Resend API ────────────────────────────────────────────
+      # ── EMAIL via Gmail SMTP ────────────────────────────────────────────
       - name: Send email report
+        uses: dawidd6/action-send-mail@v3
         continue-on-error: true
-        env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: |
-          BODY=$(cat <<EMAILBODY
-          ================================================
-            RODIALL API AUTOMATED TEST REPORT
-          ================================================
-            Status     : ${{ steps.summary.outputs.icon }} ${{ steps.summary.outputs.status }}
-            Run        : #${{ github.run_number }}
-            Date       : ${{ steps.summary.outputs.date }}
-            Duration   : ${{ steps.summary.outputs.duration }}
-            Avg Resp   : ${{ steps.summary.outputs.avg }}
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "${{ steps.summary.outputs.icon }} Rodiall API | ${{ steps.summary.outputs.status }} | Run #${{ github.run_number }} | ${{ steps.summary.outputs.date }}"
+          to: >-
+            oladimeji.ajayi@fbistech.com,
+            eyitemi.abioritsegbemi@fbistech.com,
+            gift.alabo@fbistech.com,
+            osayuki.aganmwonyi@fbistech.com,
+            afolabi.oluwo@fbistech.com
+          from: "Rodiall QA Bot <${{ secrets.GMAIL_USER }}>"
+          body: |
+            ================================================
+              RODIALL API AUTOMATED TEST REPORT
+            ================================================
+              Status     : ${{ steps.summary.outputs.icon }} ${{ steps.summary.outputs.status }}
+              Run        : #${{ github.run_number }}
+              Date       : ${{ steps.summary.outputs.date }}
+              Duration   : ${{ steps.summary.outputs.duration }}
+              Avg Resp   : ${{ steps.summary.outputs.avg }}
 
-          ------------------------------------------------
-            SUMMARY
-          ------------------------------------------------
-            Category        Executed   Passed   Failed
-            ─────────────────────────────────────────────
-            Requests        ${{ steps.summary.outputs.req_exec }}          ${{ steps.summary.outputs.req_pass }}        ${{ steps.summary.outputs.req_fail }}
-            Assertions      ${{ steps.summary.outputs.ass_exec }}          ${{ steps.summary.outputs.ass_pass }}        ${{ steps.summary.outputs.ass_fail }}
-            Test Scripts    ${{ steps.summary.outputs.scr_exec }}          ${{ steps.summary.outputs.scr_pass }}        ${{ steps.summary.outputs.scr_fail }}
+            ------------------------------------------------
+              SUMMARY
+            ------------------------------------------------
+              Category        Executed   Passed   Failed
+              ─────────────────────────────────────────────
+              Requests        ${{ steps.summary.outputs.req_exec }}          ${{ steps.summary.outputs.req_pass }}        ${{ steps.summary.outputs.req_fail }}
+              Assertions      ${{ steps.summary.outputs.ass_exec }}          ${{ steps.summary.outputs.ass_pass }}        ${{ steps.summary.outputs.ass_fail }}
+              Test Scripts    ${{ steps.summary.outputs.scr_exec }}          ${{ steps.summary.outputs.scr_pass }}        ${{ steps.summary.outputs.scr_fail }}
 
-          ------------------------------------------------
-            FAILED TEST CASES
-          ------------------------------------------------
-          ${{ steps.summary.outputs.failed_cases }}
+            ------------------------------------------------
+              FAILED TEST CASES
+            ------------------------------------------------
+            ${{ steps.summary.outputs.failed_cases }}
 
-          ------------------------------------------------
-            PASSED TEST CASES (first 40)
-          ------------------------------------------------
-          ${{ steps.summary.outputs.passed_cases }}
+            ------------------------------------------------
+              PASSED TEST CASES (first 40)
+            ------------------------------------------------
+            ${{ steps.summary.outputs.passed_cases }}
 
-          ------------------------------------------------
-            FULL HTML REPORT
-          ------------------------------------------------
-            Download artifact:
-            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ------------------------------------------------
+              FULL HTML REPORT
+            ------------------------------------------------
+              Download artifact:
+              https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            Collection : Rodiall API (269 requests)
-            Schedule   : Every Wednesday 08:00 UTC (09:00 WAT)
-          ================================================
-          EMAILBODY
-          )
-
-          BODY_JSON=$(echo "$BODY" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-
-          curl -s -X POST https://api.resend.com/emails \
-            -H "Authorization: Bearer ${RESEND_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"from\": \"Rodiall QA Bot <onboarding@resend.dev>\",
-              \"to\": [
-                \"oladimeji.ajayi@fbistech.com\",
-                \"eyitemi.abioritsegbemi@fbistech.com\",
-                \"gift.alabo@fbistech.com\",
-                \"osayuki.aganmwonyi@fbistech.com\",
-                \"afolabi.oluwo@fbistech.com\"
-              ],
-              \"subject\": \"${{ steps.summary.outputs.icon }} Rodiall API | ${{ steps.summary.outputs.status }} | Run #${{ github.run_number }} | ${{ steps.summary.outputs.date }}\",
-              \"text\": ${BODY_JSON}
-            }"
+              Collection : Rodiall API (269 requests)
+              Schedule   : Every Wednesday 08:00 UTC (09:00 WAT)
+            ================================================
 
       # ── SLACK via Incoming Webhook ──────────────────────────────────────
       - name: Send Slack notification
         continue-on-error: true
+        run: |
+          # Build compact summary for Slack (safe single-line approach)
+          FAILED_TEXT=$(echo "${{ steps.summary.outputs.failed_cases }}" | head -15 | tr '\n' ' | ' | sed 's/ | $//')
+          PASSED_TEXT=$(echo "${{ steps.summary.outputs.passed_cases }}" | head -15 | tr '\n' ' | ' | sed 's/ | $//')
+
+          python3 - <<PYEOF
+          import json, urllib.request, os
+
+          icon   = "${{ steps.summary.outputs.icon }}"
+          status = "${{ steps.summary.outputs.status }}"
+          date   = "${{ steps.summary.outputs.date }}"
+          run    = "#${{ github.run_number }}"
+          dur    = "${{ steps.summary.outputs.duration }}"
+          avg    = "${{ steps.summary.outputs.avg }}"
+
+          req_exec = "${{ steps.summary.outputs.req_exec }}"
+          req_pass = "${{ steps.summary.outputs.req_pass }}"
+          req_fail = "${{ steps.summary.outputs.req_fail }}"
+          ass_exec = "${{ steps.summary.outputs.ass_exec }}"
+          ass_pass = "${{ steps.summary.outputs.ass_pass }}"
+          ass_fail = "${{ steps.summary.outputs.ass_fail }}"
+          scr_exec = "${{ steps.summary.outputs.scr_exec }}"
+          scr_pass = "${{ steps.summary.outputs.scr_pass }}"
+          scr_fail = "${{ steps.summary.outputs.scr_fail }}"
+          run_url  = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          failed_raw = """${{ steps.summary.outputs.failed_cases }}"""
+          passed_raw = """${{ steps.summary.outputs.passed_cases }}"""
+
+          failed_lines = [l.strip() for l in failed_raw.strip().splitlines() if l.strip()][:15]
+          passed_lines = [l.strip() for l in passed_raw.strip().splitlines() if l.strip()][:15]
+
+          failed_text = "\n".join(failed_lines) if failed_lines else "None"
+          passed_text = "\n".join(passed_lines) if passed_lines else "None"
+
+          summary_table = (
+              f"```"
+              f"Category       Exec   Pass   Fail\n"
+              f"─────────────────────────────────\n"
+              f"Requests       {req_exec:<6} {req_pass:<6} {req_fail}\n"
+              f"Assertions     {ass_exec:<6} {ass_pass:<6} {ass_fail}\n"
+              f"Test Scripts   {scr_exec:<6} {scr_pass:<6} {scr_fail}"
+              f"```"
+          )
+
+          payload = {
+              "blocks": [
+                  {
+                      "type": "header",
+                      "text": {"type": "plain_text", "text": f"{icon} Rodiall API Tests — {status}"}
+                  },
+                  {
+                      "type": "section",
+                      "fields": [
+                          {"type": "mrkdwn", "text": f"*Run:*\n{run}"},
+                          {"type": "mrkdwn", "text": f"*Date:*\n{date}"},
+                          {"type": "mrkdwn", "text": f"*Duration:*\n{dur}"},
+                          {"type": "mrkdwn", "text": f"*Avg Response:*\n{avg}"}
+                      ]
+                  },
+                  {
+                      "type": "section",
+                      "text": {"type": "mrkdwn", "text": f"*SUMMARY*\n{summary_table}"}
+                  },
+                  {
+                      "type": "section",
+                      "text": {"type": "mrkdwn", "text": f"*FAILED TEST CASES*\n```{failed_text}```"}
+                  },
+                  {
+                      "type": "section",
+                      "text": {"type": "mrkdwn", "text": f"*PASSED TEST CASES (first 15)*\n```{passed_text}```"}
+                  },
+                  {
+                      "type": "actions",
+                      "elements": [{
+                          "type": "button",
+                          "text": {"type": "plain_text", "text": "📄 Download HTML Report"},
+                          "url": run_url
+                      }]
+                  }
+              ]
+          }
+
+          data = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["SLACK_WEBHOOK_URL"],
+              data=data,
+              headers={"Content-Type": "application/json"}
+          )
+          with urllib.request.urlopen(req) as resp:
+              print("Slack response:", resp.read().decode())
+          PYEOF
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          # Truncate failed cases for Slack (max ~2000 chars per block)
-          FAILED_SLACK=$(echo "${{ steps.summary.outputs.failed_cases }}" | head -20)
-          PASSED_SLACK=$(echo "${{ steps.summary.outputs.passed_cases }}" | head -20)
-
-          FAILED_JSON=$(echo "$FAILED_SLACK" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-          PASSED_JSON=$(echo "$PASSED_SLACK" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"blocks\": [
-                {
-                  \"type\": \"header\",
-                  \"text\": {
-                    \"type\": \"plain_text\",
-                    \"text\": \"${{ steps.summary.outputs.icon }} Rodiall API Tests — ${{ steps.summary.outputs.status }}\"
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"fields\": [
-                    { \"type\": \"mrkdwn\", \"text\": \"*Run:*\\n#${{ github.run_number }}\" },
-                    { \"type\": \"mrkdwn\", \"text\": \"*Date:*\\n${{ steps.summary.outputs.date }}\" },
-                    { \"type\": \"mrkdwn\", \"text\": \"*Duration:*\\n${{ steps.summary.outputs.duration }}\" },
-                    { \"type\": \"mrkdwn\", \"text\": \"*Avg Response:*\\n${{ steps.summary.outputs.avg }}\" }
-                  ]
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"*SUMMARY*\\n\`\`\`Category       Exec   Pass   Fail\\n─────────────────────────────\\nRequests       ${{ steps.summary.outputs.req_exec }}      ${{ steps.summary.outputs.req_pass }}      ${{ steps.summary.outputs.req_fail }}\\nAssertions     ${{ steps.summary.outputs.ass_exec }}      ${{ steps.summary.outputs.ass_pass }}      ${{ steps.summary.outputs.ass_fail }}\\nTest Scripts   ${{ steps.summary.outputs.scr_exec }}      ${{ steps.summary.outputs.scr_pass }}      ${{ steps.summary.outputs.scr_fail }}\`\`\`\"
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"*FAILED TEST CASES*\\n\`\`\`${FAILED_SLACK}\`\`\`\"
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"*PASSED TEST CASES (first 20)*\\n\`\`\`${PASSED_SLACK}\`\`\`\"
-                  }
-                },
-                {
-                  \"type\": \"actions\",
-                  \"elements\": [
-                    {
-                      \"type\": \"button\",
-                      \"text\": { \"type\": \"plain_text\", \"text\": \"Download HTML Report\" },
-                      \"url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
-                    }
-                  ]
-                }
-              ]
-            }"
