@@ -41,9 +41,7 @@ jobs:
         run: |
           OUTPUT=$(cat newman-output.txt 2>/dev/null || echo "No output captured")
 
-          # ── Extract executed / failed counts from Newman table ──────────
           extract() {
-            # $1 = label as it appears in Newman output (e.g. "requests")
             echo "$OUTPUT" | grep -m1 "│ *$1" | grep -Eo "[0-9]+" | paste -sd '/' | head -1
           }
 
@@ -51,9 +49,8 @@ jobs:
           ASS_RAW=$(extract "assertions")
           SCR_RAW=$(extract "test-scripts")
           DUR=$(echo "$OUTPUT" | grep "total run duration" | grep -Eo "[0-9]+m [0-9.]+s|[0-9.]+s" | head -1)
-          AVG=$(echo "$OUTPUT" | grep "average response time" | sed 's/.*average response time: //' | grep -Eo "\[.+\]" | head -1)
+          AVG=$(echo "$OUTPUT" | grep "average response time" | grep -Eo "\[.+\]" | head -1)
 
-          # executed / failed
           REQ_EXEC=$(echo "$REQ_RAW" | cut -d'/' -f1)
           REQ_FAIL=$(echo "$REQ_RAW" | cut -d'/' -f2)
           ASS_EXEC=$(echo "$ASS_RAW" | cut -d'/' -f1)
@@ -61,57 +58,47 @@ jobs:
           SCR_EXEC=$(echo "$SCR_RAW" | cut -d'/' -f1)
           SCR_FAIL=$(echo "$SCR_RAW" | cut -d'/' -f2)
 
-          # passed = executed - failed
           REQ_PASS=$(( ${REQ_EXEC:-0} - ${REQ_FAIL:-0} ))
           ASS_PASS=$(( ${ASS_EXEC:-0} - ${ASS_FAIL:-0} ))
           SCR_PASS=$(( ${SCR_EXEC:-0} - ${SCR_FAIL:-0} ))
 
-          # Overall status
           if [ "${REQ_FAIL:-0}" = "0" ] && [ "${ASS_FAIL:-0}" = "0" ] && [ "${SCR_FAIL:-0}" = "0" ]; then
             ICON="✅"; STATUS="ALL TESTS PASSED"
           else
             ICON="⚠️"; STATUS="SOME TESTS FAILED"
           fi
 
-          # ── Collect individual failed test case names ──────────────────
-          # Newman format:   NN.  AssertionError  <test name>
-          #                       <detail>
-          #                       inside "<request path>"
           FAILED_CASES=$(echo "$OUTPUT" | awk '
             /^[[:space:]]+[0-9]+\.[[:space:]]+(AssertionError|JSONError|Error)/ {
-              # capture test name (everything after the error type)
               line = $0
               sub(/^[[:space:]]+[0-9]+\.[[:space:]]+(AssertionError|JSONError|Error)[[:space:]]+/, "", line)
               test_name = line
             }
             /inside "/ {
-              # extract request path
               match($0, /inside "([^"]+)"/, arr)
               if (arr[1] != "") {
-                printf "  FAIL | %s\n       └─ %s\n", test_name, arr[1]
+                printf "  ✗ %s\n    └─ %s\n", test_name, arr[1]
                 test_name = ""
               }
             }
-          ' | head -60)
+          ' | head -80)
 
-          # ── Passed test names (✓ lines in Newman output) ───────────────
           PASSED_CASES=$(echo "$OUTPUT" | grep -E "^[[:space:]]+✓" | \
-            sed 's/^[[:space:]]*✓[[:space:]]*/  PASS | /' | head -40)
+            sed 's/^[[:space:]]*✓[[:space:]]*/  ✓ /' | head -40)
 
-          # ── Write outputs ──────────────────────────────────────────────
-          echo "icon=$ICON"                   >> $GITHUB_OUTPUT
-          echo "status=$STATUS"               >> $GITHUB_OUTPUT
-          echo "req_exec=$REQ_EXEC"           >> $GITHUB_OUTPUT
-          echo "req_pass=$REQ_PASS"           >> $GITHUB_OUTPUT
-          echo "req_fail=$REQ_FAIL"           >> $GITHUB_OUTPUT
-          echo "ass_exec=$ASS_EXEC"           >> $GITHUB_OUTPUT
-          echo "ass_pass=$ASS_PASS"           >> $GITHUB_OUTPUT
-          echo "ass_fail=$ASS_FAIL"           >> $GITHUB_OUTPUT
-          echo "scr_exec=$SCR_EXEC"           >> $GITHUB_OUTPUT
-          echo "scr_pass=$SCR_PASS"           >> $GITHUB_OUTPUT
-          echo "scr_fail=$SCR_FAIL"           >> $GITHUB_OUTPUT
-          echo "duration=$DUR"                >> $GITHUB_OUTPUT
-          echo "avg=$AVG"                     >> $GITHUB_OUTPUT
+          echo "icon=$ICON"         >> $GITHUB_OUTPUT
+          echo "status=$STATUS"     >> $GITHUB_OUTPUT
+          echo "req_exec=$REQ_EXEC" >> $GITHUB_OUTPUT
+          echo "req_pass=$REQ_PASS" >> $GITHUB_OUTPUT
+          echo "req_fail=$REQ_FAIL" >> $GITHUB_OUTPUT
+          echo "ass_exec=$ASS_EXEC" >> $GITHUB_OUTPUT
+          echo "ass_pass=$ASS_PASS" >> $GITHUB_OUTPUT
+          echo "ass_fail=$ASS_FAIL" >> $GITHUB_OUTPUT
+          echo "scr_exec=$SCR_EXEC" >> $GITHUB_OUTPUT
+          echo "scr_pass=$SCR_PASS" >> $GITHUB_OUTPUT
+          echo "scr_fail=$SCR_FAIL" >> $GITHUB_OUTPUT
+          echo "duration=$DUR"      >> $GITHUB_OUTPUT
+          echo "avg=$AVG"           >> $GITHUB_OUTPUT
 
           {
             echo 'failed_cases<<EOF_FAILED'
@@ -133,56 +120,69 @@ jobs:
           path: newman/Rodiall-API-report.html
           retention-days: 30
 
-      - name: Send email report
-        uses: dawidd6/action-send-mail@v3
+      - name: Send email via Resend API
         continue-on-error: true
-        with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "${{ steps.summary.outputs.icon }} Rodiall API Tests | ${{ steps.summary.outputs.status }} | Run #${{ github.run_number }} | ${{ steps.summary.outputs.duration }}"
-          to: >-
-            oladimeji.ajayi@fbistech.com,
-            eyitemi.abioritsegbemi@fbistech.com,
-            gift.alabo@fbistech.com,
-            osayuki.aganmwonyi@fbistech.com,
-            afolabi.oluwo@fbistech.com
-          from: "Rodiall QA Bot <${{ secrets.SMTP_USERNAME }}>"
-          body: |
-            ================================================
-              RODIALL API AUTOMATED TEST REPORT
-            ================================================
-              Status     : ${{ steps.summary.outputs.icon }} ${{ steps.summary.outputs.status }}
-              Run        : #${{ github.run_number }}
-              Duration   : ${{ steps.summary.outputs.duration }}
-              Avg Resp   : ${{ steps.summary.outputs.avg }}
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          DATE=$(date '+%Y-%m-%d')
 
-            ------------------------------------------------
-              SUMMARY
-            ------------------------------------------------
-              Category        Executed   Passed   Failed
-              ─────────────────────────────────────────────
-              Requests        ${{ steps.summary.outputs.req_exec }}          ${{ steps.summary.outputs.req_pass }}        ${{ steps.summary.outputs.req_fail }}
-              Assertions      ${{ steps.summary.outputs.ass_exec }}          ${{ steps.summary.outputs.ass_pass }}        ${{ steps.summary.outputs.ass_fail }}
-              Test Scripts    ${{ steps.summary.outputs.scr_exec }}          ${{ steps.summary.outputs.scr_pass }}        ${{ steps.summary.outputs.scr_fail }}
+          BODY=$(cat <<EMAILBODY
+          ================================================
+            RODIALL API AUTOMATED TEST REPORT
+          ================================================
+            Status     : ${{ steps.summary.outputs.icon }} ${{ steps.summary.outputs.status }}
+            Run        : #${{ github.run_number }}
+            Date       : ${DATE}
+            Duration   : ${{ steps.summary.outputs.duration }}
+            Avg Resp   : ${{ steps.summary.outputs.avg }}
 
-            ------------------------------------------------
-              FAILED TEST CASES
-            ------------------------------------------------
-            ${{ steps.summary.outputs.failed_cases }}
+          ------------------------------------------------
+            SUMMARY
+          ------------------------------------------------
+            Category        Executed   Passed   Failed
+            ─────────────────────────────────────────────
+            Requests        ${{ steps.summary.outputs.req_exec }}          ${{ steps.summary.outputs.req_pass }}        ${{ steps.summary.outputs.req_fail }}
+            Assertions      ${{ steps.summary.outputs.ass_exec }}          ${{ steps.summary.outputs.ass_pass }}        ${{ steps.summary.outputs.ass_fail }}
+            Test Scripts    ${{ steps.summary.outputs.scr_exec }}          ${{ steps.summary.outputs.scr_pass }}        ${{ steps.summary.outputs.scr_fail }}
 
-            ------------------------------------------------
-              PASSED TEST CASES (first 40)
-            ------------------------------------------------
-            ${{ steps.summary.outputs.passed_cases }}
+          ------------------------------------------------
+            FAILED TEST CASES
+          ------------------------------------------------
+          ${{ steps.summary.outputs.failed_cases }}
 
-            ------------------------------------------------
-              FULL HTML REPORT
-            ------------------------------------------------
-              Download artifact from:
-              https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ------------------------------------------------
+            PASSED TEST CASES (first 40)
+          ------------------------------------------------
+          ${{ steps.summary.outputs.passed_cases }}
 
-              Collection : Rodiall API (269 requests)
-              Schedule   : Every Wednesday 08:00 UTC (09:00 WAT)
-            ================================================
+          ------------------------------------------------
+            FULL HTML REPORT
+          ------------------------------------------------
+            Download artifact:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Collection : Rodiall API (269 requests)
+            Schedule   : Every Wednesday 08:00 UTC (09:00 WAT)
+          ================================================
+          EMAILBODY
+          )
+
+          # Escape body for JSON
+          BODY_JSON=$(echo "$BODY" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          curl -s -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from\": \"Rodiall QA Bot <onboarding@resend.dev>\",
+              \"to\": [
+                \"oladimeji.ajayi@fbistech.com\",
+                \"eyitemi.abioritsegbemi@fbistech.com\",
+                \"gift.alabo@fbistech.com\",
+                \"osayuki.aganmwonyi@fbistech.com\",
+                \"afolabi.oluwo@fbistech.com\"
+              ],
+              \"subject\": \"${{ steps.summary.outputs.icon }} Rodiall API | ${{ steps.summary.outputs.status }} | Run #${{ github.run_number }} | ${DATE}\",
+              \"text\": ${BODY_JSON}
+            }"
