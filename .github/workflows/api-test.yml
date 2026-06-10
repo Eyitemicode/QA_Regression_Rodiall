@@ -10,74 +10,124 @@ jobs:
   run-tests:
     name: Newman API Tests
     runs-on: ubuntu-latest
+    # Job never fails — report is always sent regardless of test outcome
+    continue-on-error: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        continue-on-error: true
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
+        continue-on-error: true
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
+        continue-on-error: true
 
       - name: Run Newman tests
         id: newman
         run: |
-          set -o pipefail
-          npm test 2>&1 | tee newman-output.txt
-        continue-on-error: true   # don't fail the job; let email step always run
+          npm test 2>&1 | tee newman-output.txt || true
+        continue-on-error: true
 
       - name: Parse test summary
         id: summary
+        continue-on-error: true
         run: |
-          OUTPUT=$(cat newman-output.txt)
+          OUTPUT=$(cat newman-output.txt 2>/dev/null || echo "No output captured")
 
-          get_stat() {
-            echo "$OUTPUT" | grep -A2 "$1" | grep -Eo "[0-9]+" | head -2 | paste -sd '/'
+          # ── Extract executed / failed counts from Newman table ──────────
+          extract() {
+            # $1 = label as it appears in Newman output (e.g. "requests")
+            echo "$OUTPUT" | grep -m1 "│ *$1" | grep -Eo "[0-9]+" | paste -sd '/' | head -1
           }
 
-          REQUESTS=$(get_stat "requests")
-          ASSERTIONS=$(get_stat "assertions")
-          SCRIPTS=$(get_stat "test-scripts")
-          DURATION=$(echo "$OUTPUT" | grep "total run duration" | grep -Eo "[0-9]+m [0-9.]+s|[0-9.]+s" | head -1)
-          AVG=$(echo "$OUTPUT" | grep "average response time" | sed 's/.*average response time: //' | tr -d '│')
+          REQ_RAW=$(extract "requests")
+          ASS_RAW=$(extract "assertions")
+          SCR_RAW=$(extract "test-scripts")
+          DUR=$(echo "$OUTPUT" | grep "total run duration" | grep -Eo "[0-9]+m [0-9.]+s|[0-9.]+s" | head -1)
+          AVG=$(echo "$OUTPUT" | grep "average response time" | sed 's/.*average response time: //' | grep -Eo "\[.+\]" | head -1)
 
-          REQ_FAIL=$(echo "$REQUESTS"  | cut -d'/' -f2)
-          A_FAIL=$(echo "$ASSERTIONS"  | cut -d'/' -f2)
-          S_FAIL=$(echo "$SCRIPTS"     | cut -d'/' -f2)
+          # executed / failed
+          REQ_EXEC=$(echo "$REQ_RAW" | cut -d'/' -f1)
+          REQ_FAIL=$(echo "$REQ_RAW" | cut -d'/' -f2)
+          ASS_EXEC=$(echo "$ASS_RAW" | cut -d'/' -f1)
+          ASS_FAIL=$(echo "$ASS_RAW" | cut -d'/' -f2)
+          SCR_EXEC=$(echo "$SCR_RAW" | cut -d'/' -f1)
+          SCR_FAIL=$(echo "$SCR_RAW" | cut -d'/' -f2)
 
-          if [ "${REQ_FAIL:-0}" = "0" ] && [ "${A_FAIL:-0}" = "0" ] && [ "${S_FAIL:-0}" = "0" ]; then
-            STATUS="ALL TESTS PASSED"
-            ICON="✅"
+          # passed = executed - failed
+          REQ_PASS=$(( ${REQ_EXEC:-0} - ${REQ_FAIL:-0} ))
+          ASS_PASS=$(( ${ASS_EXEC:-0} - ${ASS_FAIL:-0} ))
+          SCR_PASS=$(( ${SCR_EXEC:-0} - ${SCR_FAIL:-0} ))
+
+          # Overall status
+          if [ "${REQ_FAIL:-0}" = "0" ] && [ "${ASS_FAIL:-0}" = "0" ] && [ "${SCR_FAIL:-0}" = "0" ]; then
+            ICON="✅"; STATUS="ALL TESTS PASSED"
           else
-            STATUS="SOME TESTS FAILED"
-            ICON="⚠️"
+            ICON="⚠️"; STATUS="SOME TESTS FAILED"
           fi
 
-          # Top failures (up to 20 lines)
-          FAILURES=$(echo "$OUTPUT" | awk '/^   #  failure/,0' | head -60 | \
-            grep -E "AssertionError|JSONError|Error$|inside" | head -20 | sed 's/^/  /')
+          # ── Collect individual failed test case names ──────────────────
+          # Newman format:   NN.  AssertionError  <test name>
+          #                       <detail>
+          #                       inside "<request path>"
+          FAILED_CASES=$(echo "$OUTPUT" | awk '
+            /^[[:space:]]+[0-9]+\.[[:space:]]+(AssertionError|JSONError|Error)/ {
+              # capture test name (everything after the error type)
+              line = $0
+              sub(/^[[:space:]]+[0-9]+\.[[:space:]]+(AssertionError|JSONError|Error)[[:space:]]+/, "", line)
+              test_name = line
+            }
+            /inside "/ {
+              # extract request path
+              match($0, /inside "([^"]+)"/, arr)
+              if (arr[1] != "") {
+                printf "  FAIL | %s\n       └─ %s\n", test_name, arr[1]
+                test_name = ""
+              }
+            }
+          ' | head -60)
 
-          echo "status=$ICON $STATUS"                    >> $GITHUB_OUTPUT
-          echo "requests=$REQUESTS"                      >> $GITHUB_OUTPUT
-          echo "assertions=$ASSERTIONS"                  >> $GITHUB_OUTPUT
-          echo "scripts=$SCRIPTS"                        >> $GITHUB_OUTPUT
-          echo "duration=$DURATION"                      >> $GITHUB_OUTPUT
-          echo "avg=$AVG"                                >> $GITHUB_OUTPUT
+          # ── Passed test names (✓ lines in Newman output) ───────────────
+          PASSED_CASES=$(echo "$OUTPUT" | grep -E "^[[:space:]]+✓" | \
+            sed 's/^[[:space:]]*✓[[:space:]]*/  PASS | /' | head -40)
 
-          # Multi-line safe for GITHUB_OUTPUT
+          # ── Write outputs ──────────────────────────────────────────────
+          echo "icon=$ICON"                   >> $GITHUB_OUTPUT
+          echo "status=$STATUS"               >> $GITHUB_OUTPUT
+          echo "req_exec=$REQ_EXEC"           >> $GITHUB_OUTPUT
+          echo "req_pass=$REQ_PASS"           >> $GITHUB_OUTPUT
+          echo "req_fail=$REQ_FAIL"           >> $GITHUB_OUTPUT
+          echo "ass_exec=$ASS_EXEC"           >> $GITHUB_OUTPUT
+          echo "ass_pass=$ASS_PASS"           >> $GITHUB_OUTPUT
+          echo "ass_fail=$ASS_FAIL"           >> $GITHUB_OUTPUT
+          echo "scr_exec=$SCR_EXEC"           >> $GITHUB_OUTPUT
+          echo "scr_pass=$SCR_PASS"           >> $GITHUB_OUTPUT
+          echo "scr_fail=$SCR_FAIL"           >> $GITHUB_OUTPUT
+          echo "duration=$DUR"                >> $GITHUB_OUTPUT
+          echo "avg=$AVG"                     >> $GITHUB_OUTPUT
+
           {
-            echo 'failures<<FAILURES_EOF'
-            echo "$FAILURES"
-            echo 'FAILURES_EOF'
+            echo 'failed_cases<<EOF_FAILED'
+            echo "$FAILED_CASES"
+            echo 'EOF_FAILED'
+          } >> $GITHUB_OUTPUT
+
+          {
+            echo 'passed_cases<<EOF_PASSED'
+            echo "$PASSED_CASES"
+            echo 'EOF_PASSED'
           } >> $GITHUB_OUTPUT
 
       - name: Upload HTML report artifact
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: rodiall-api-report-${{ github.run_number }}
           path: newman/Rodiall-API-report.html
@@ -85,12 +135,13 @@ jobs:
 
       - name: Send email report
         uses: dawidd6/action-send-mail@v3
+        continue-on-error: true
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "${{ steps.summary.outputs.status }} | Rodiall API Tests | Run #${{ github.run_number }} | ${{ steps.summary.outputs.duration }}"
+          subject: "${{ steps.summary.outputs.icon }} Rodiall API Tests | ${{ steps.summary.outputs.status }} | Run #${{ github.run_number }} | ${{ steps.summary.outputs.duration }}"
           to: >-
             oladimeji.ajayi@fbistech.com,
             eyitemi.abioritsegbemi@fbistech.com,
@@ -99,33 +150,39 @@ jobs:
             afolabi.oluwo@fbistech.com
           from: "Rodiall QA Bot <${{ secrets.SMTP_USERNAME }}>"
           body: |
-            ========================================
-            RODIALL API AUTOMATED TEST REPORT
-            ========================================
+            ================================================
+              RODIALL API AUTOMATED TEST REPORT
+            ================================================
+              Status     : ${{ steps.summary.outputs.icon }} ${{ steps.summary.outputs.status }}
+              Run        : #${{ github.run_number }}
+              Duration   : ${{ steps.summary.outputs.duration }}
+              Avg Resp   : ${{ steps.summary.outputs.avg }}
 
-            Status:        ${{ steps.summary.outputs.status }}
-            Run Number:    #${{ github.run_number }}
-            Duration:      ${{ steps.summary.outputs.duration }}
-            Avg Response:  ${{ steps.summary.outputs.avg }}
+            ------------------------------------------------
+              SUMMARY
+            ------------------------------------------------
+              Category        Executed   Passed   Failed
+              ─────────────────────────────────────────────
+              Requests        ${{ steps.summary.outputs.req_exec }}          ${{ steps.summary.outputs.req_pass }}        ${{ steps.summary.outputs.req_fail }}
+              Assertions      ${{ steps.summary.outputs.ass_exec }}          ${{ steps.summary.outputs.ass_pass }}        ${{ steps.summary.outputs.ass_fail }}
+              Test Scripts    ${{ steps.summary.outputs.scr_exec }}          ${{ steps.summary.outputs.scr_pass }}        ${{ steps.summary.outputs.scr_fail }}
 
-            ----------------------------------------
-            TEST RESULTS
-            ----------------------------------------
-            Requests:      ${{ steps.summary.outputs.requests }}   (executed / failed)
-            Assertions:    ${{ steps.summary.outputs.assertions }}   (executed / failed)
-            Test Scripts:  ${{ steps.summary.outputs.scripts }}   (executed / failed)
+            ------------------------------------------------
+              FAILED TEST CASES
+            ------------------------------------------------
+            ${{ steps.summary.outputs.failed_cases }}
 
-            ----------------------------------------
-            FAILURE DETAILS
-            ----------------------------------------
-            ${{ steps.summary.outputs.failures }}
+            ------------------------------------------------
+              PASSED TEST CASES (first 40)
+            ------------------------------------------------
+            ${{ steps.summary.outputs.passed_cases }}
 
-            ----------------------------------------
-            FULL REPORT
-            ----------------------------------------
-            HTML report uploaded as artifact — download from:
-            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ------------------------------------------------
+              FULL HTML REPORT
+            ------------------------------------------------
+              Download artifact from:
+              https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            Collection : Rodiall API (269 requests)
-            Schedule   : Every Wednesday 08:00 UTC
-            ========================================
+              Collection : Rodiall API (269 requests)
+              Schedule   : Every Wednesday 08:00 UTC (09:00 WAT)
+            ================================================
